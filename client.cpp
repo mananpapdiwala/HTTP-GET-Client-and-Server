@@ -78,7 +78,7 @@ void persistentConnection(string server_host, int server_port, string* files, in
 	string connection_type =  "Connection: Keep-Alive";
 	for(int i = 0; i < file_count; i++){
 		if(i == file_count-1) connection_type = "Connection: Closed";
-		generateHttpRequest(files[i], buffer,connection_type);
+		generateHttpRequest(files[i], buffer, connection_type);
 		send(sock_id, buffer, strlen(buffer), 0);
 		clearBuffer(buffer);
 		int valread = read(sock_id, buffer, 1024);
@@ -96,6 +96,36 @@ void persistentConnection(string server_host, int server_port, string* files, in
 	}
 	close(sock_id);
 
+}
+
+void nonPersistentConnection(string server_host, int server_port, string* files, int file_count){
+	string connection_type =  "Connection: Closed";
+	for(int i = 0; i < file_count; i++){
+		struct sockaddr_in address, server_address;
+		int sock_id = createSocket(server_host, server_port, address, server_address);
+
+		if(connect(sock_id, (struct sockaddr *)&server_address, sizeof(server_address)) < 0){
+			cout<<"Connection Failed"<<endl;
+			exit(EXIT_FAILURE);
+		}
+		char buffer[1024] = {0};
+		generateHttpRequest(files[i], buffer, connection_type);
+		send(sock_id, buffer, strlen(buffer), 0);
+		clearBuffer(buffer);
+		int valread = read(sock_id, buffer, 1024);
+		int status = getStatus(buffer);
+
+		if(status == 200){
+			saveFile(buffer, files[i]);
+		}
+		else if(status == 404){
+			cout<<"File Not Found. 404 Error"<<endl;
+		}
+		else{
+			cout<<"Status Not Supported"<<endl;
+		}
+		close(sock_id);
+	}
 }
 
 int main(int argc, char const* argv[]){
@@ -116,6 +146,10 @@ int main(int argc, char const* argv[]){
 	string server_host = string(argv[1]);
 	int server_port = atoi(argv[2]);
 	int connection_type = atoi(argv[3]);
-	if(connection_type) persistentConnection(server_host, server_port, files, file_count);
+	if(connection_type == 1) persistentConnection(server_host, server_port, files, file_count);
+	else if(connection_type == 0) nonPersistentConnection(server_host, server_port, files, file_count);
+	else{
+		cout<<"Invalid Connection Type"<<endl;
+	}
 	return 0;
 }
