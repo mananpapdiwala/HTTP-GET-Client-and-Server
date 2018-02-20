@@ -18,12 +18,13 @@ int getStatus(char* buffer){
 	return status;
 }
 
-void generateHttpRequest(string file_name, char* buffer){
+void generateHttpRequest(string file_name, char* buffer, string connection_type){
 	if(file_name == "/") file_name = "";
 	string tempBuffer = "GET /" + file_name + " HTTP/1.1\r\n";
 	tempBuffer+="User-Agent: CustomClient\r\n";
 	tempBuffer+="Host: 129.79.247.5\r\n";
-	tempBuffer+="Connection: Closed\r\n\r\n";
+	tempBuffer+=connection_type;
+	tempBuffer+="\r\n\r\n";
 	strcpy(buffer, tempBuffer.c_str());
 }
 
@@ -42,11 +43,58 @@ void saveFile(char* buffer, string file_name){
 	outputFile.close();
 }
 
-int createSocket(string server_host, int server_port){
+int createSocket(string server_host, int server_port, struct sockaddr_in& address, struct sockaddr_in& server_address){
+	int sock_id;
+	if((sock_id = socket(AF_INET, SOCK_STREAM, 0)) < 0){
+		cout<<"Error in creating the socket."<<endl;
+		exit(EXIT_FAILURE);
+	}
+	memset(&server_address, '0', sizeof(server_address));
+	server_address.sin_family = AF_INET;
+	server_address.sin_port = htons(server_port);
 	
+	if(inet_pton(AF_INET, server_host.c_str(), &server_address.sin_addr) <= 0){
+		cout<<"Invalid address. This address is not supported."<<endl;
+		exit(EXIT_FAILURE);
+	}
+	return sock_id;
 }
 
-void nonPersistentConnection(string server_host, int server_port, int connection_type, string* files, int file_count){
+void clearBuffer(char* buffer){
+	for(int i = 0; i < 1024; i++){
+		buffer[i] = 0;
+	}
+}
+
+void persistentConnection(string server_host, int server_port, string* files, int file_count){
+	struct sockaddr_in address, server_address;
+	int sock_id = createSocket(server_host, server_port, address, server_address);
+
+	if(connect(sock_id, (struct sockaddr *)&server_address, sizeof(server_address)) < 0){
+		cout<<"Connection Failed"<<endl;
+		exit(EXIT_FAILURE);
+	}
+	char buffer[1024] = {0};
+	string connection_type =  "Connection: Keep-Alive";
+	for(int i = 0; i < file_count; i++){
+		if(i == file_count-1) connection_type = "Connection: Closed";
+		generateHttpRequest(files[i], buffer,connection_type);
+		send(sock_id, buffer, strlen(buffer), 0);
+		clearBuffer(buffer);
+		int valread = read(sock_id, buffer, 1024);
+		int status = getStatus(buffer);
+
+		if(status == 200){
+			saveFile(buffer, files[i]);
+		}
+		else if(status == 404){
+			cout<<"File Not Found. 404 Error"<<endl;
+		}
+		else{
+			cout<<"Status Not Supported"<<endl;
+		}
+	}
+	close(sock_id);
 
 }
 
@@ -64,55 +112,10 @@ int main(int argc, char const* argv[]){
 		files[i] = string(argv[4+i]);
 	}
 
-
+	
 	string server_host = string(argv[1]);
 	int server_port = atoi(argv[2]);
 	int connection_type = atoi(argv[3]);
-	//string file_name = string(argv[4]);
-	string connectionTypeString;
-
-	struct sockaddr_in address, server_address;
-	
-	char buffer[1024] = {0};
-	int sock_id;
-	if((sock_id = socket(AF_INET, SOCK_STREAM, 0)) < 0){
-		cout<<"Error in creating the socket."<<endl;
-		exit(EXIT_FAILURE);
-	}
-	memset(&server_address, '0', sizeof(server_address));
-	server_address.sin_family = AF_INET;
-	server_address.sin_port = htons(server_port);
-	
-	if(inet_pton(AF_INET, server_host.c_str(), &server_address.sin_addr) <= 0){
-		cout<<"Invalid address. This address is not supported."<<endl;
-		exit(EXIT_FAILURE);
-	}
-	cout<<server_port<<endl;
-	if(connect(sock_id, (struct sockaddr *)&server_address, sizeof(server_address)) < 0){
-		cout<<"Connection Failed"<<endl;
-		exit(EXIT_FAILURE);
-	}
-	
-	generateHttpRequest(file_name, buffer);
-	
-	send(sock_id, buffer, strlen(buffer), 0);
-	for(int i = 0; i < 1024; i++){
-			buffer[i] = 0;
-	}
-	int valread = read(sock_id, buffer, 1024);
-	int status = getStatus(buffer);
-	
-	if(status == 200){
-		saveFile(buffer, file_name);
-	}
-	else if(status == 404){
-		cout<<"File Not Found. 404 Error"<<endl;
-	}
-	else{
-		cout<<"Status Not Supported"<<endl;
-	}
-	
-	close(sock_id);
-	
+	if(connection_type) persistentConnection(server_host, server_port, files, file_count);
 	return 0;
 }

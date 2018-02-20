@@ -8,7 +8,7 @@
 
 using namespace std;
 
-string parseHttp(string httpRequest){
+string parseHttp(string httpRequest, bool& isConnectionClosed){
 	size_t pathStart = httpRequest.find_first_of("/");
 	if(pathStart == string::npos){
 		cout<<"Error parsing HttpRequest. InValid Path."<<endl;
@@ -20,19 +20,34 @@ string parseHttp(string httpRequest){
 		cout<<"Path is empty"<<endl;
 		return "index.html";
 	}
+	size_t connection_pos = httpRequest.find("Connection:");
+	if(connection_pos == string::npos){
+		cout<<"Connection - Type is missing. Default value is Closed."<<endl;
+		isConnectionClosed = true;
+	}
+	else{
+		if(httpRequest.find("Keep-Alive", connection_pos) != string::npos){
+			isConnectionClosed = false;
+		}
+		else{
+			isConnectionClosed = true;
+		}
+
+	}
 	return httpRequest.substr(pathStart+1, pathEnd - pathStart-1);
 	
 }
 
-void generateHttpResponse(string filePath, char* buffer){
+void generateHttpResponse(string filePath, char* buffer, bool isConnectionClosed){
 	ifstream file_id(filePath.c_str());
+	string connection_type = isConnectionClosed ? "Closed" : "Keep-Alive";
 	if(!file_id){
 		cout<<"Could not find "<<filePath<<"."<<endl;
-		string tempBuffer = "HTTP/1.1 404 Not Found\r\nContent-Type: txt\r\n\r\n";
+		string tempBuffer = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n" + connection_type+ "\r\n\r\n";
 		strcpy(buffer, tempBuffer.c_str());	
 	}
 	else{
-		string tempBuffer = "HTTP/1.1 200 OK\r\nContent-Type: txt\r\n\r\n";
+		string tempBuffer = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n" + connection_type + "\r\n\r\n";
 		string temp = "";
 		while(getline(file_id, temp)){
 			tempBuffer+=(temp+"\n");
@@ -74,6 +89,8 @@ int main(int argc, char const* argv[]){
 		exit(EXIT_FAILURE);
 	}
 	
+	
+
 	while(1){
 		cout<<"Receiving on port: "<<portNumber<<endl;
 		if((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addlen)) < 0){
@@ -81,16 +98,20 @@ int main(int argc, char const* argv[]){
 			exit(EXIT_FAILURE);
 		}
 		char buffer[1024] = {0};
-		valread = read(new_socket, buffer, 1024);
-		string httpRequest(buffer);
-		string path = parseHttp(httpRequest);
-		for(int i = 0; i < 1024; i++){
-			buffer[i] = 0;
-		}
-		generateHttpResponse(path, buffer);
+
+		bool isConnectionClosed = false;
+		while(!isConnectionClosed){
+			valread = read(new_socket, buffer, 1024);
+			string httpRequest(buffer);
+			string path = parseHttp(httpRequest, isConnectionClosed);
+			for(int i = 0; i < 1024; i++){
+				buffer[i] = 0;
+			}
+			generateHttpResponse(path, buffer, isConnectionClosed);
+			send(new_socket, buffer, strlen(buffer), 0);
 		
-		send(new_socket, buffer, strlen(buffer), 0);
-		cout<<"Message Sent"<<endl;
+		}
+		
 		close(new_socket);
 	}
 	close(server_fd);
