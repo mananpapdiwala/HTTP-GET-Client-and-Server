@@ -5,6 +5,7 @@
 #include <cstring>
 #include <unistd.h>
 #include <fstream>
+#include <pthread.h>
 
 using namespace std;
 
@@ -58,11 +59,47 @@ void generateHttpResponse(string filePath, char* buffer, bool isConnectionClosed
 	}
 }
 
+void clearBuffer(char* buffer){
+	for(int i = 0; i < 1024; i++){
+		buffer[i] = 0;
+	}
+}
+
+void *handleNewRequest(void* socket_id){	
+	int* new_socket_pointer = (int*)socket_id;
+	int new_socket = *new_socket_pointer;
+	
+	struct timeval tv;
+	tv.tv_sec = 2;
+	tv.tv_usec = 0;
+	setsockopt(new_socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+	
+	char buffer[1024] = {0};	
+	bool isConnectionClosed = false;
+	while(!isConnectionClosed){
+		int valread = read(new_socket, buffer, 1024);		
+		if(valread > 0){
+			string httpRequest(buffer);
+			string path = parseHttp(httpRequest, isConnectionClosed);
+			clearBuffer(buffer);
+			generateHttpResponse(path, buffer, isConnectionClosed);
+			send(new_socket, buffer, strlen(buffer), 0);			
+			clearBuffer(buffer);
+		}	
+		else{			
+			break;
+		}	
+	}
+	
+	close(new_socket);
+	free(new_socket_pointer);
+}
+
 int main(int argc, char const* argv[]){
 	if(argc != 2) cout<<"Please enter a port number"<<endl;
 	int portNumber = atoi(argv[1]);
 	int opt = 1;
-	int server_fd, new_socket, valread;	
+	int server_fd, new_socket;	
 	if((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0){
 		cout<<"Socket Creating Failed"<<endl;
 		exit(EXIT_FAILURE);
@@ -93,35 +130,19 @@ int main(int argc, char const* argv[]){
 
 	while(1){
 		cout<<"Receiving on port: "<<portNumber<<endl;
-		if((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addlen)) < 0){
+		int* new_socket = (int*)malloc(sizeof(int));
+		if((*(new_socket) = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addlen)) < 0){
 			cout<<"Accept Failed"<<endl;
 			exit(EXIT_FAILURE);
 		}
-		char buffer[1024] = {0};
-
-		struct timeval tv;
-		tv.tv_sec = 2;
-		tv.tv_usec = 0;
-		setsockopt(new_socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
-
-		bool isConnectionClosed = false;
-		while(!isConnectionClosed){
-			valread = read(new_socket, buffer, 1024);
-			if(valread > 0){
-				string httpRequest(buffer);
-				string path = parseHttp(httpRequest, isConnectionClosed);
-				for(int i = 0; i < 1024; i++){
-					buffer[i] = 0;
-				}
-				generateHttpResponse(path, buffer, isConnectionClosed);
-				send(new_socket, buffer, strlen(buffer), 0);
-			}
-			else{
-				break;
-			}
-		}
 		
-		close(new_socket);
+		pthread_t thread_instance;
+		int iter;
+		if(iter = pthread_create(&thread_instance, NULL, handleNewRequest, (void*)new_socket)){
+			cout<<"Thread Creation Failed"<<endl;
+			exit(EXIT_FAILURE);
+		}
+				
 	}
 	close(server_fd);
 	return 0;

@@ -75,9 +75,9 @@ void persistentConnection(string server_host, int server_port, string* files, in
 		exit(EXIT_FAILURE);
 	}
 	char buffer[1024] = {0};
-	string connection_type =  "Connection: Keep-Alive";
+	string connection_type =  "Connection: keep-alive";
 	for(int i = 0; i < file_count; i++){
-		if(i == file_count-1) connection_type = "Connection: Closed";
+		if(i == file_count-1) connection_type = "Connection: closed";
 		generateHttpRequest(files[i], buffer, connection_type);
 		send(sock_id, buffer, strlen(buffer), 0);
 		clearBuffer(buffer);
