@@ -6,20 +6,13 @@
 #include <cstdlib>
 #include <unistd.h>
 
-using namespace std;
+#define BUFFSIZE 10000000
 
-void clearBuffer(char* buffer){
-	for(int i = 0; i < 1024; i++){
-		buffer[i] = 0;
-	}
-}
+using namespace std;
 
 string parseHttp(string httpRequest){
 	size_t pathStart = httpRequest.find("/");
-	if(pathStart == string::npos){
-		cout<<"Error parsing HttpRequest. InValid Path."<<endl;
-		return NULL;		
-	}
+	
 	size_t pathEnd = httpRequest.find(" ", pathStart);
 
 	if(pathEnd == pathStart + 1){
@@ -36,7 +29,7 @@ void generateHttpResponse(string filePath, char* buffer){
 	
 	if(!file_id){
 		cout<<"Could not find "<<filePath<<"."<<endl;
-		string tempBuffer = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nConnection: closed\r\n\r\n";
+		string tempBuffer = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nConnection: closed\r\n\r\nEOF";
 		strcpy(buffer, tempBuffer.c_str());	
 	}
 	else{
@@ -45,7 +38,7 @@ void generateHttpResponse(string filePath, char* buffer){
 		while(getline(file_id, temp)){
 			tempBuffer+=(temp+"\n");
 		}
-		tempBuffer+="\r\n";
+		tempBuffer+="\r\nEOF";
 		file_id.close();
 		strcpy(buffer, tempBuffer.c_str());	
 	}
@@ -71,7 +64,7 @@ int main(int argc, char const* argv[]){
 		cout<<"Error Assigning port"<<endl;
 		exit(EXIT_FAILURE);
 	}
-	
+
 	struct sockaddr_in address;
 	memset((char*)&address, 0, sizeof(address));
 
@@ -86,21 +79,49 @@ int main(int argc, char const* argv[]){
 	}
 	
 	int recvlen;
-	char buffer[1024];
+	
+	char* buffer = (char*)calloc(BUFFSIZE,sizeof(char));
 	struct sockaddr_in remaddr;
 	socklen_t raddrlen = sizeof(remaddr);
 	while(1){
 		cout<<"Receiving on port: "<<portNumber<<endl;
-		recvlen = recvfrom(server_fd, buffer, 1024, 0, (struct sockaddr*)&remaddr, &raddrlen);
-		if(recvlen > 0){
-			string httpRequest(buffer);
+		recvlen = recvfrom(server_fd, buffer, BUFFSIZE, 0, (struct sockaddr*)&remaddr, &raddrlen);
+		string httpRequest(buffer);
+		string tempRequest(buffer);		
+		
+		while(tempRequest.find("EOF") == string::npos && recvlen > 0){			
+			recvlen = recvfrom(server_fd, buffer, BUFFSIZE, 0, (struct sockaddr*)&remaddr, &raddrlen);
+			tempRequest = string(buffer);
+			httpRequest+=tempRequest;			
+		}
+		
+		if(recvlen > 0){					
 			string path = parseHttp(httpRequest);
-			clearBuffer(buffer);
+			bzero(buffer, BUFFSIZE);
 			generateHttpResponse(path, buffer);
-			sendto(server_fd, buffer, strlen(buffer), 0, (struct sockaddr*)&remaddr, raddrlen);
+			
+			string dataToSend(buffer);
+			int count = 0;
+			string currentSend = "";
+			while(count < dataToSend.size()){
+				currentSend = dataToSend.substr(count, 1500);
+				strcpy(buffer, currentSend.c_str());
+				if(sendto(server_fd, buffer, strlen(buffer), 0, (struct sockaddr*)&remaddr, raddrlen) < 0){
+					perror("Error: ");
+					cout<<"Sending Failed"<<endl;
+					close(server_fd);
+					free(buffer);
+					exit(EXIT_FAILURE);
+				}
+				count+=currentSend.size();
+			}
+			
+
+			bzero(buffer, BUFFSIZE);
 		}
 	}
 	close(server_fd);
+	free(buffer);
 	
 	return 0;
 }

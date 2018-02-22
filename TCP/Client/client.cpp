@@ -8,10 +8,11 @@
 #include <arpa/inet.h>
 #include <fstream>
 
+#define BUFFSIZE 100000
+
 using namespace std;
 
-int getStatus(char* buffer){
-	string data(buffer);
+int getStatus(string data){	
 	size_t pos = data.find(" ");
 	size_t endpos = data.find(" ", pos+1);
 	int status = stoi(data.substr(pos+1, endpos - pos - 1));
@@ -28,19 +29,25 @@ void generateHttpRequest(string file_name, char* buffer, string connection_type)
 	strcpy(buffer, tempBuffer.c_str());
 }
 
-void saveFile(char* buffer, string file_name){
-	string data(buffer);
+void saveFile(string data, string file_name){	
 	size_t position = data.find("\r\n\r\n");
 	if(position == string::npos){
 		cout<<"Data not available."<<endl;
 		return;
+	}	
+	size_t end_position = data.find_last_of("\r\n");
+	
+	if(end_position == string::npos){
+		data = data.substr(position+4);
 	}
-	data = data.substr(position+4);
-	ofstream outputFile;
+	else{
+		data = data.substr(position+4, (end_position-1 - position - 4));
+	}
+	
 	if(file_name == "/") file_name = "index.html";
-	outputFile.open(file_name.c_str());
-	outputFile << data;
-	outputFile.close();
+	cout<<"File Name: "<<file_name<<endl;
+	cout<<"File Content:"<<endl;
+	cout<<data<<endl;	
 }
 
 int createSocket(string server_host, int server_port, struct sockaddr_in& address, struct sockaddr_in& server_address){
@@ -60,12 +67,6 @@ int createSocket(string server_host, int server_port, struct sockaddr_in& addres
 	return sock_id;
 }
 
-void clearBuffer(char* buffer){
-	for(int i = 0; i < 1024; i++){
-		buffer[i] = 0;
-	}
-}
-
 void persistentConnection(string server_host, int server_port, string* files, int file_count){
 	struct sockaddr_in address, server_address;
 	int sock_id = createSocket(server_host, server_port, address, server_address);
@@ -74,58 +75,82 @@ void persistentConnection(string server_host, int server_port, string* files, in
 		cout<<"Connection Failed"<<endl;
 		exit(EXIT_FAILURE);
 	}
-	char buffer[1024] = {0};
+	char* buffer = (char*)calloc(BUFFSIZE,sizeof(char));
 	string connection_type =  "Connection: keep-alive";
+	string httpData = "";
+	string tempData = "";
 	for(int i = 0; i < file_count; i++){
-		if(i == file_count-1) connection_type = "Connection: closed";
-		generateHttpRequest(files[i], buffer, connection_type);
+		if(i == file_count-1) connection_type = "Connection: closed";		
+		generateHttpRequest(files[i], buffer, connection_type);		
 		send(sock_id, buffer, strlen(buffer), 0);
-		clearBuffer(buffer);
-		int valread = read(sock_id, buffer, 1024);
-		int status = getStatus(buffer);
-
+		bzero(buffer, BUFFSIZE);
+		bool flag = false;
+		httpData = tempData;
+		while(!flag){
+			read(sock_id, buffer, BUFFSIZE);					
+			tempData = string(buffer);
+			httpData+=tempData;
+			if(tempData.find("$EOF$") != string::npos){
+				flag = true;
+				char* tempP = buffer;
+				tempP+=tempData.size();
+				tempData = string(tempP);
+				cout<<httpData.size()<<endl;
+			}			
+		}
+		
+		int status = getStatus(httpData);			
+		
 		if(status == 200){
-			saveFile(buffer, files[i]);
+			saveFile(httpData, files[i]);			
 		}
 		else if(status == 404){
-			cout<<"File Not Found. 404 Error"<<endl;
+			cout<<"File "<<files[i]<<" not Found. 404 Error"<<endl;
 		}
 		else{
 			cout<<"Status Not Supported"<<endl;
 		}
-	}
+		
+		bzero(buffer, BUFFSIZE);
+	}	
 	close(sock_id);
+	free(buffer);
 
 }
 
 void nonPersistentConnection(string server_host, int server_port, string* files, int file_count){
-	string connection_type =  "Connection: Closed";
+	string connection_type =  "Connection: Closed";	
 	for(int i = 0; i < file_count; i++){
 		struct sockaddr_in address, server_address;
-		int sock_id = createSocket(server_host, server_port, address, server_address);
-
+		int sock_id = createSocket(server_host, server_port, address, server_address);		
 		if(connect(sock_id, (struct sockaddr *)&server_address, sizeof(server_address)) < 0){
 			cout<<"Connection Failed"<<endl;
 			exit(EXIT_FAILURE);
 		}
-		char buffer[1024] = {0};
-		generateHttpRequest(files[i], buffer, connection_type);
-		send(sock_id, buffer, strlen(buffer), 0);
-		clearBuffer(buffer);
-		int valread = read(sock_id, buffer, 1024);
-		int status = getStatus(buffer);
+		char* buffer = (char*)calloc(BUFFSIZE,sizeof(char));
+		
+		generateHttpRequest(files[i], buffer, connection_type);		
+		send(sock_id, buffer, strlen(buffer), 0);		
+		bzero(buffer, BUFFSIZE);
+		string httpData = "";
+		while(read(sock_id, buffer, BUFFSIZE) > 0){
+			httpData+=string(buffer);
+			bzero(buffer, BUFFSIZE);
+		}		
+		int status = getStatus(httpData);
 
 		if(status == 200){
-			saveFile(buffer, files[i]);
+			saveFile(httpData, files[i]);			
 		}
 		else if(status == 404){
-			cout<<"File Not Found. 404 Error"<<endl;
+			cout<<"File "<<files[i]<<" not Found. 404 Error"<<endl;
 		}
 		else{
 			cout<<"Status Not Supported"<<endl;
 		}
 		close(sock_id);
-	}
+		free(buffer);
+	}	
 }
 
 int main(int argc, char const* argv[]){
@@ -146,6 +171,7 @@ int main(int argc, char const* argv[]){
 	string server_host = string(argv[1]);
 	int server_port = atoi(argv[2]);
 	int connection_type = atoi(argv[3]);
+	
 	if(connection_type == 1) persistentConnection(server_host, server_port, files, file_count);
 	else if(connection_type == 0) nonPersistentConnection(server_host, server_port, files, file_count);
 	else{

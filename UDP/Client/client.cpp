@@ -8,35 +8,38 @@
 #include <arpa/inet.h>
 #include <string>
 
+#define BUFFSIZE 10000
+#define TIMEOUT_MS 100000
+
 using namespace std;
 
-void clearBuffer(char* buffer){
-	for(int i = 0; i < 1024; i++){
-		buffer[i] = 0;
-	}
-}
-
-int getStatus(char* buffer){
-	string data(buffer);
-	size_t pos = data.find(" ");
-	size_t endpos = data.find(" ", pos+1);
-	int status = stoi(data.substr(pos+1, endpos - pos - 1));
+int getStatus(string httpResponse){
+	size_t pos = httpResponse.find(" ");
+	size_t endpos = httpResponse.find(" ", pos+1);
+	int status = stoi(httpResponse.substr(pos+1, endpos - pos - 1));
 	return status;
 }
 
-void saveFile(char* buffer, string file_name){
-	string data(buffer);
-	size_t position = data.find("\r\n\r\n");
+void saveFile(string httpResponse, string file_name){	
+	size_t position = httpResponse.find("\r\n\r\n");
 	if(position == string::npos){
 		cout<<"Data not available."<<endl;
 		return;
 	}
-	data = data.substr(position+4);
-	ofstream outputFile;
+	size_t end_position = httpResponse.find_last_of("\r\n");
+	string data;
+	if(end_position == string::npos){
+		data = httpResponse.substr(position+4);
+		cout<<"Here"<<endl;
+	}
+	else{
+		data = httpResponse.substr(position+4, end_position-1-position-4);
+		cout<<"Not here"<<endl;
+	}	
 	if(file_name == "/") file_name = "index.html";
-	outputFile.open(file_name.c_str());
-	outputFile << data;
-	outputFile.close();
+	cout<<"File Name: "<<file_name<<endl;
+	cout<<"File Content:"<<endl;
+	cout<<data<<endl;
 }
 
 void generateHttpRequest(string file_name, char* buffer){
@@ -46,6 +49,7 @@ void generateHttpRequest(string file_name, char* buffer){
 	tempBuffer+="Host: 129.79.247.5\r\n";
 	tempBuffer+="Connection: closed";
 	tempBuffer+="\r\n\r\n";
+	tempBuffer+="EOF";
 	strcpy(buffer, tempBuffer.c_str());
 }
 
@@ -54,6 +58,7 @@ int main(int argc, char const* argv[]){
 		cout<<"Invalid number of parameters."<<endl;
 		exit(EXIT_FAILURE);
 	}
+	
 
 	string server_host = string(argv[1]);
 	int server_port = atoi(argv[2]);
@@ -63,11 +68,19 @@ int main(int argc, char const* argv[]){
 
 	struct sockaddr_in server_address;
 	socklen_t addrlen = sizeof(server_address);
-	if((sock_id = socket(AF_INET, SOCK_DGRAM, 0)) < 0){
+	if((sock_id = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0){
 		cout<<"Error in creating the socket."<<endl;
 		exit(EXIT_FAILURE);
 	}
-	memset((char*)&server_address, '0', sizeof(server_address));
+
+	struct timeval tv;
+	tv.tv_sec = 0;
+	tv.tv_usec = TIMEOUT_MS;
+	if (setsockopt(sock_id, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
+	    perror("Error");
+	}
+
+	memset((char*)&server_address, 0, sizeof(server_address));
 	server_address.sin_family = AF_INET;
 	server_address.sin_port = htons(server_port);
 	
@@ -75,32 +88,45 @@ int main(int argc, char const* argv[]){
 		cout<<"Invalid address. This address is not supported."<<endl;
 		exit(EXIT_FAILURE);
 	}
-
-	char buffer[1024];
-	generateHttpRequest(file_name, buffer);
-	if(sendto(sock_id, buffer, sizeof(buffer), 0, (struct sockaddr*) &server_address, addrlen) < 0){
+	
+	char* buffer = (char*)calloc(BUFFSIZE,sizeof(char));
+	generateHttpRequest(file_name, buffer);	
+	
+	if(sendto(sock_id, buffer, strlen(buffer), 0, (struct sockaddr*) &server_address, addrlen) < 0){
 		cout<<"Sending Failed"<<endl;
 		close(sock_id);
 		exit(EXIT_FAILURE);
 	}
-	clearBuffer(buffer);
-	if(recvfrom(sock_id, buffer, 1024, 0, (struct sockaddr*)&server_address, &addrlen) < 0){
-		cout<<"Receiving Failed"<<endl;
-		close(sock_id);
-		exit(EXIT_FAILURE);	
+		
+	
+	bzero(buffer, BUFFSIZE);
+	bool flag = false;
+	int count_bytes = 0;
+	string httpResponse = "";
+	string tempResponse = "";
+	while((!flag) && (recvfrom(sock_id, buffer, BUFFSIZE, 0, (struct sockaddr*)&server_address, &addrlen) > 0)){
+		tempResponse = string(buffer);
+		httpResponse+=tempResponse;
+		count_bytes+=tempResponse.size();
+		if(tempResponse.find("EOF") != string::npos){
+			flag = true;
+		}
 	}
 	
-	int status = getStatus(buffer);
-
+	
+	int status = getStatus(httpResponse);	
 	if(status == 200){
-		saveFile(buffer, file_name);
+		saveFile(httpResponse, file_name);
+		cout<<"File "<<file_name<<" successfully saved."<<endl;
+		cout<<"Total Bytes received including the header and last special character: "<<count_bytes<<endl;
 	}
 	else if(status == 404){
-		cout<<"File Not Found. 404 Error"<<endl;
+		cout<<"File "<<file_name<<" not Found. 404 Error"<<endl;
 	}
 	else{
 		cout<<"Status Not Supported"<<endl;
 	}
 
 	close(sock_id);
+	free(buffer);
 }

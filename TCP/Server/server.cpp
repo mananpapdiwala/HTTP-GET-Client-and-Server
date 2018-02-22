@@ -6,15 +6,16 @@
 #include <unistd.h>
 #include <fstream>
 
+#define BUFFSIZE 10000000
+#define QUEUE_SIZE 10
+#define TIMEOUT 5
+
 using namespace std;
 
 string parseHttp(string httpRequest, bool& isConnectionClosed){
-	size_t pathStart = httpRequest.find_first_of("/");
-	if(pathStart == string::npos){
-		cout<<"Error parsing HttpRequest. InValid Path."<<endl;
-		return NULL;		
-	}
-	size_t pathEnd = httpRequest.find_first_of(" ", pathStart);
+	size_t pathStart = httpRequest.find("/");
+	
+	size_t pathEnd = httpRequest.find(" ", pathStart);
 
 	if(pathEnd == pathStart + 1){
 		cout<<"Path is empty"<<endl;
@@ -43,7 +44,7 @@ void generateHttpResponse(string filePath, char* buffer, bool isConnectionClosed
 	string connection_type = isConnectionClosed ? "closed" : "keep-alive";
 	if(!file_id){
 		cout<<"Could not find "<<filePath<<"."<<endl;
-		string tempBuffer = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nConnection: " + connection_type+ "\r\n\r\n";
+		string tempBuffer = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nConnection: " + connection_type+ "\r\n\r\n$EOF$";
 		strcpy(buffer, tempBuffer.c_str());	
 	}
 	else{
@@ -53,13 +54,23 @@ void generateHttpResponse(string filePath, char* buffer, bool isConnectionClosed
 			tempBuffer+=(temp+"\n");
 		}
 		tempBuffer+="\r\n";
+		tempBuffer+="$EOF$";
 		file_id.close();
 		strcpy(buffer, tempBuffer.c_str());	
 	}
 }
 
+void clearBuffer(char* buffer){
+	for(int i = 0; i < BUFFSIZE; i++){
+		buffer[i] = 0;
+	}
+}
+
 int main(int argc, char const* argv[]){
-	if(argc != 2) cout<<"Please enter a port number"<<endl;
+	if(argc != 2){
+		cout<<"Please enter a port number"<<endl;
+		exit(EXIT_FAILURE);
+	}
 	int portNumber = atoi(argv[1]);
 	int opt = 1;
 	int server_fd, new_socket, valread;	
@@ -84,45 +95,46 @@ int main(int argc, char const* argv[]){
 		exit(EXIT_FAILURE);
 	}
 	
-	if(listen(server_fd, 3) < 0){
+	if(listen(server_fd, QUEUE_SIZE) < 0){
 		cout<<"Error in listening"<<endl;
 		exit(EXIT_FAILURE);
 	}
 	
 	
-
+	char* buffer = (char*)calloc(BUFFSIZE,sizeof(char));
+	
 	while(1){
-		cout<<"Receiving on port: "<<portNumber<<endl;
-		if((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addlen)) < 0){
+		cout<<"Listening on port: "<<portNumber<<endl;
+		new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addlen);
+		if(new_socket < 0){
 			cout<<"Accept Failed"<<endl;
 			exit(EXIT_FAILURE);
 		}
-		char buffer[1024] = {0};
-
+		
 		struct timeval tv;
-		tv.tv_sec = 2;
+		tv.tv_sec = TIMEOUT;
 		tv.tv_usec = 0;
 		setsockopt(new_socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
-
+		
 		bool isConnectionClosed = false;
 		while(!isConnectionClosed){
-			valread = read(new_socket, buffer, 1024);
+			valread = read(new_socket, buffer, BUFFSIZE);
 			if(valread > 0){
-				string httpRequest(buffer);
-				string path = parseHttp(httpRequest, isConnectionClosed);
-				for(int i = 0; i < 1024; i++){
-					buffer[i] = 0;
-				}
-				generateHttpResponse(path, buffer, isConnectionClosed);
+				string httpRequest(buffer);				
+				string path = parseHttp(httpRequest, isConnectionClosed);				
+				bzero(buffer, BUFFSIZE);
+				generateHttpResponse(path, buffer, isConnectionClosed);				
 				send(new_socket, buffer, strlen(buffer), 0);
+				bzero(buffer, BUFFSIZE);
 			}
 			else{
 				break;
 			}
 		}
 		
-		close(new_socket);
+		close(new_socket);		
 	}
 	close(server_fd);
+	free(buffer);
 	return 0;
 }
