@@ -95,12 +95,10 @@ void persistentConnection(string server_host, int server_port, string* files, in
 				char* tempP = buffer;
 				tempP+=tempData.size();
 				tempData = string(tempP);
-				cout<<httpData.size()<<endl;
 			}			
 		}
 		
 		int status = getStatus(httpData);			
-		
 		if(status == 200){
 			saveFile(httpData, files[i]);			
 		}
